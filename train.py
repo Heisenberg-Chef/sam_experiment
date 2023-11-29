@@ -21,9 +21,9 @@ from utils.misc import compute_iou, compute_boundary_iou
 # this method is deprecated.
 visualize = False
 epoch_start = 1
-epoch_num = 20
-save_freq = 4
-checkpoint = "./sam_hq_vit_l.pth"
+epoch_num = 200
+save_freq = 5
+checkpoint = "./weights/4.pth"
 
 # set KMP_DUPLICATE_LIB_OK=TRUE
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
@@ -104,7 +104,7 @@ for epoch in range(epoch_start, epoch_num):
         boundary_iou_res.append(boundary_iou)
         gather_iou = sum(iou_res)
         gather_boundary_iou = sum(boundary_iou_res)
-        logger_val.info(f"{epoch}:{gather_iou},{gather_boundary_iou}")
+        logger_train.info(f"{epoch}:{gather_iou},{gather_boundary_iou}")
 
     # TRAIN
     loss_value = 0
@@ -112,7 +112,7 @@ for epoch in range(epoch_start, epoch_num):
 
     print(f"Training...epoch:{epoch}")
     print("epoch:   ", epoch, "  learning rate:  ", optimizer.param_groups[0]["lr"])
-    for idx, data in enumerate(train_dataloader):
+    for idx, data in enumerate(tqdm.tqdm(train_dataloader)):
         inputs, labels = data['image'], data['label']
         inputs = inputs.cuda()
         labels = labels.cuda()
@@ -168,10 +168,10 @@ for epoch in range(epoch_start, epoch_num):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        print(f"REPORT AT {epoch}:")
-        for name in data["name"]:
-            print("\t" + name)
-        print(f"loss value:{loss_value / (idx + 1)}")
+        # print(f"REPORT AT {epoch}:")
+        # for name in data["name"]:
+        #     print("\t" + name)
+        # print(f"loss value:{loss_value / (idx + 1)}")
     print("Finished epoch:", epoch)
     print("Averaged stats:", loss_value / len(train_dataloader))
     logger_train.info(f"{epoch}:{loss_value / len(train_dataloader)}")
