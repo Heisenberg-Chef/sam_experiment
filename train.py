@@ -23,7 +23,7 @@ visualize = False
 epoch_start = 1
 epoch_num = 200
 save_freq = 5
-checkpoint = "./weights/4.pth"
+checkpoint = "./sam_hq_vit_l.pth"
 
 # set KMP_DUPLICATE_LIB_OK=TRUE
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
@@ -51,7 +51,7 @@ print("--- create optimizer ---")
 optimizer = optim.Adam(model.parameters(), lr=1e-3, betas=(0.9, 0.999), eps=1e-08,
                        weight_decay=0)
 # 余弦退火
-lr_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=20, eta_min=0)
+lr_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=100, eta_min=0)
 
 # LOOP
 for epoch in range(epoch_start, epoch_num):
@@ -75,7 +75,6 @@ for epoch in range(epoch_start, epoch_num):
             dict_input['original_size'] = label_val.shape[-2:]
 
             with torch.no_grad():
-                # must be batch.
                 output = model([dict_input], multimask_output=False)
 
             iou = compute_iou(output[0]["masks"], label_val)

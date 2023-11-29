@@ -52,6 +52,6 @@ class ShitSet(Dataset):
         return sample
 
 
-shit_train = DataLoader(ShitSet(data_path=r"D:\beihang\shit\**\train"), batch_size=2, shuffle=False)
+shit_train = DataLoader(ShitSet(data_path=r"E:\datasets\shit\**\train"), batch_size=4, shuffle=True)
 # evaluation data must batch size equals one.
-shit_val = DataLoader(ShitSet(data_path=r"D:\beihang\shit\**\val", evaluation=True), batch_size=1)
+shit_val = DataLoader(ShitSet(data_path=r"E:\datasets\shit\**\val", evaluation=True), batch_size=1)
