@@ -8,7 +8,7 @@ from torchvision import transforms
 from utils.transform import *
 
 
-class ShitSet(Dataset):
+class SegSets(Dataset):
     def __init__(self, data_path=r"E:\datasets\shit\**\train", transform=transforms.Compose([RandomHFlip(),
                                                                                              LargeScaleJitter()]),
                  evaluation=False):
@@ -52,6 +52,6 @@ class ShitSet(Dataset):
         return sample
 
 
-shit_train = DataLoader(ShitSet(data_path=r"D:\beihang\shit\**\train"), batch_size=2, shuffle=False)
+seg_train = DataLoader(SegSets(data_path=r"D:\cv\seg\foam packing\train"), batch_size=1, shuffle=True)
 # evaluation data must batch size equals one.
-shit_val = DataLoader(ShitSet(data_path=r"D:\beihang\shit\**\val", evaluation=True), batch_size=1)
+seg_val = DataLoader(SegSets(data_path=r"D:\cv\seg\foam packing\val", evaluation=True), batch_size=1)

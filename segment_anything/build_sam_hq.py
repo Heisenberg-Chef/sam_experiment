@@ -82,8 +82,10 @@ def build_sam_vit_t(checkpoint=None):
             iou_head_hidden_dim=256,
             vit_dim=160,
         ),
-        pixel_mean=[123.675, 116.28, 103.53],
-        pixel_std=[58.395, 57.12, 57.375],
+        # pixel_mean=[123.675, 116.28, 103.53],
+        # pixel_std=[58.395, 57.12, 57.375],
+        pixel_mean=[0, 0, 0],
+        pixel_std=[0, 0, 0],
     )
 
     mobile_sam.eval()
@@ -105,7 +107,7 @@ sam_model_registry = {
     "vit_h": build_sam_vit_h,
     "vit_l": build_sam_vit_l,
     "vit_b": build_sam_vit_b,
-    "vit_tiny": build_sam_vit_t
+    # "vit_tiny": build_sam_vit_t
 }
 
 

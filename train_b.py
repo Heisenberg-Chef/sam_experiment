@@ -23,17 +23,17 @@ visualize = False
 epoch_start = 0
 epoch_num = 200
 save_freq = 5
-checkpoint = "./weights/5.pth"
+checkpoint = "./sam_hq_vit_b.pth"
 
 # set KMP_DUPLICATE_LIB_OK=TRUE
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 
 print("--- init model ---")
-model = sam_model_registry["vit_l"](checkpoint=checkpoint)
+model = sam_model_registry["vit_b"](checkpoint=checkpoint)
 
 print("--- create dataloader ---")
-train_dataloader = ShitSets.shit_train
-val_dataloader = ShitSets.shit_val
+train_dataloader = SegSets.seg_train
+val_dataloader = SegSets.seg_val
 print(f"--- train:{len(train_dataloader)},val:{len(val_dataloader)} ---")
 
 if torch.cuda.is_available():
@@ -48,19 +48,18 @@ for idx, params in enumerate(model.named_parameters()):
         print(str(idx) + " : " + params[0] + " : " + " need to be trained.")
 
 print("--- create optimizer ---")
-optimizer = optim.Adam(model.parameters(), lr=5e-3, betas=(0.9, 0.999), eps=1e-08,
+optimizer = optim.Adam(model.parameters(), lr=1e-3, betas=(0.9, 0.999), eps=1e-08,
                        weight_decay=0)
 # 余弦退火
-lr_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=200, eta_min=1e-08)
+lr_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=100, eta_min=1e-08)
 
 # LOOP
 for epoch in range(epoch_start, epoch_num):
     iou_res = []
     boundary_iou_res = []
     # EVALUATE
-
-    # if epoch % save_freq == 0:
-    if 1:
+    # if epoch % save_freq == 0 and epoch != 0:
+    if epoch % save_freq == 0:
         model.eval()
         print("Validating...")
         for data in tqdm.tqdm(val_dataloader):
@@ -71,14 +70,12 @@ for epoch in range(epoch_start, epoch_num):
             img_val = img_val.squeeze(dim=0).cuda()
             # BATCH SIZE MUST EQUAL ONE.
             dict_input: dict[str, Any] = {}
-            # labels_box = misc.masks_to_boxes(label[:, 0, :, :])
-            # dict_input['boxes'] = labels_box
-            labels_points = misc.masks_sample_points(label[:, 0, :, :])
+            labels_box = misc.masks_to_boxes(label)
+            dict_input['boxes'] = labels_box
+            # labels_points = misc.masks_sample_points(label[:, 0, :, :])
             dict_input['image'] = torch.as_tensor(input_, device=model.device).contiguous()
-            dict_input['point_coords'] = labels_points
-            dict_input['point_labels'] = torch.ones(labels_points.shape[1], device=labels_points.device)[None, :]
             dict_input['original_size'] = label_val.shape[-2:]
-            draw_tensor(label_val)
+            draw_tensor(label.unsqueeze(dim=0), boxes=labels_box)
             with torch.no_grad():
                 # must be batch.
                 output = model([dict_input], multimask_output=False)
@@ -100,8 +97,8 @@ for epoch in range(epoch_start, epoch_num):
                           show_boundary_iou)
             iou_res.append(iou)
             boundary_iou_res.append(boundary_iou)
-        gather_iou = sum(iou_res)/len(val_dataloader)
-        gather_boundary_iou = sum(boundary_iou_res)/len(val_dataloader)
+        gather_iou = sum(iou_res) / len(val_dataloader)
+        gather_boundary_iou = sum(boundary_iou_res) / len(val_dataloader)
         logger_train.info(f"{epoch}:{gather_iou},{gather_boundary_iou}")
 
     # TRAIN
@@ -178,5 +175,5 @@ for epoch in range(epoch_start, epoch_num):
 
     # SAVE
     if epoch % save_freq == 0:
-        print(f"Saving pth at './weights/{epoch}.pth'")
-        torch.save(model.state_dict(), f"./weights/{epoch}.pth")
+        print(f"Saving pth at './weights_b/{epoch}.pth'")
+        torch.save(model.state_dict(), f"./weights_b/{epoch}.pth")
