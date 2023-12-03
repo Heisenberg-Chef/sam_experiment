@@ -1,13 +1,12 @@
-import random
 import os
+import random
 import time
 from typing import Any
-import numpy as np
 
+import numpy as np
 import torch.cuda
 import torch.nn.functional as F
 import tqdm
-from matplotlib import pyplot as plt
 from torch import optim
 
 from datasets import SegSets
@@ -15,7 +14,7 @@ from segment_anything.build_sam_hq import sam_model_registry
 from utils import misc
 from utils.Loss import loss_masks
 from utils.draw import show_anns, draw_tensor
-from utils.logger import logger_train, logger_val
+from utils.logger import logger_train
 from utils.misc import compute_iou, compute_boundary_iou
 
 # this method is deprecated.
@@ -32,8 +31,8 @@ print("--- init model ---")
 model = sam_model_registry["vit_l"](checkpoint=checkpoint)
 
 print("--- create dataloader ---")
-train_dataloader = ShitSets.shit_train
-val_dataloader = ShitSets.shit_val
+train_dataloader = SegSets.seg_train
+val_dataloader = SegSets.seg_val
 print(f"--- train:{len(train_dataloader)},val:{len(val_dataloader)} ---")
 
 if torch.cuda.is_available():
@@ -71,14 +70,20 @@ for epoch in range(epoch_start, epoch_num):
             img_val = img_val.squeeze(dim=0).cuda()
             # BATCH SIZE MUST EQUAL ONE.
             dict_input: dict[str, Any] = {}
-            # labels_box = misc.masks_to_boxes(label[:, 0, :, :])
-            # dict_input['boxes'] = labels_box
-            labels_points = misc.masks_sample_points(label[:, 0, :, :])
+            # box prompts
+            labels_box = misc.masks_to_boxes(label)
+            dict_input['boxes'] = labels_box
             dict_input['image'] = torch.as_tensor(input_, device=model.device).contiguous()
-            dict_input['point_coords'] = labels_points
-            dict_input['point_labels'] = torch.ones(labels_points.shape[1], device=labels_points.device)[None, :]
+            # image size
             dict_input['original_size'] = label_val.shape[-2:]
-            draw_tensor(label_val)
+            # point
+            # labels_points = misc.masks_sample_points(label)
+            # dict_input['point_coords'] = labels_points
+            # dict_input['point_labels'] = torch.ones(labels_points.shape[1], device=labels_points.device)[None, :]
+
+
+            # shit....
+            draw_tensor(label.unsqueeze(dim=0), boxes=labels_box)
             with torch.no_grad():
                 # must be batch.
                 output = model([dict_input], multimask_output=False)
@@ -98,10 +103,11 @@ for epoch in range(epoch_start, epoch_num):
                 img = np.transpose(img, (1, 2, 0))
                 show_anns(masks_hq_vis, None, labels_box.cpu()[0], None, save_base, img, show_iou,
                           show_boundary_iou)
+            draw_tensor(output[0]["masks"],boxes=labels_box)
             iou_res.append(iou)
             boundary_iou_res.append(boundary_iou)
-        gather_iou = sum(iou_res)/len(val_dataloader)
-        gather_boundary_iou = sum(boundary_iou_res)/len(val_dataloader)
+        gather_iou = sum(iou_res) / len(val_dataloader)
+        gather_boundary_iou = sum(boundary_iou_res) / len(val_dataloader)
         logger_train.info(f"{epoch}:{gather_iou},{gather_boundary_iou}")
 
     # TRAIN
