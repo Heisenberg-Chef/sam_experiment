@@ -52,6 +52,6 @@ class SegSets(Dataset):
         return sample
 
 
-seg_train = DataLoader(SegSets(data_path=r"E:\datasets\seg\foam packing\train"), batch_size=1, shuffle=True)
+seg_train = DataLoader(SegSets(data_path=r"E:\datasets\seg\**\train"), batch_size=5, shuffle=True)
 # evaluation data must batch size equals one.
-seg_val = DataLoader(SegSets(data_path=r"E:\datasets\seg\foam packing\val", evaluation=True), batch_size=1)
+seg_val = DataLoader(SegSets(data_path=r"E:\datasets\seg\**\val", evaluation=True), batch_size=1)

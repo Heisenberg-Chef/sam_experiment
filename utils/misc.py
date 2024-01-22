@@ -1,7 +1,7 @@
+import cv2
+import numpy as np
 import torch
 import torch.nn.functional as F
-import numpy as np
-import cv2
 
 
 def masks_to_boxes(masks):
@@ -22,11 +22,11 @@ def masks_to_boxes(masks):
     y = y.to(masks)
     x = x.to(masks)
 
-    x_mask = ((masks > 128) * x.unsqueeze(0))
+    x_mask = (masks > 128) * x.unsqueeze(0)
     x_max = x_mask.flatten(1).max(-1)[0]
     x_min = x_mask.masked_fill(~(masks > 128), 1e8).flatten(1).min(-1)[0]
 
-    y_mask = ((masks > 128) * y.unsqueeze(0))
+    y_mask = (masks > 128) * y.unsqueeze(0)
     y_max = y_mask.flatten(1).max(-1)[0]
     y_min = y_mask.masked_fill(~(masks > 128), 1e8).flatten(1).min(-1)[0]
 
@@ -34,8 +34,7 @@ def masks_to_boxes(masks):
 
 
 def masks_sample_points(masks, k=10):
-    """Sample points on mask
-    """
+    """Sample points on mask"""
     if masks.numel() == 0:
         return torch.zeros((0, 2), device=masks.device)
 
@@ -50,7 +49,7 @@ def masks_sample_points(masks, k=10):
     # k = 10
     samples = []
     for b_i in range(len(masks)):
-        select_mask = (masks[b_i] > 128)
+        select_mask = masks[b_i] > 128
         # 通过给定的掩码，选择符合条件的
         x_idx = torch.masked_select(x, select_mask)
         y_idx = torch.masked_select(y, select_mask)
@@ -71,8 +70,8 @@ def masks_noise(masks):
         mask = input_masks.float()
         w = input_masks.shape[-1]
         h = input_masks.shape[-2]
-        mask_small = F.interpolate(mask, (h // sfact, w // sfact), mode='bilinear')
-        mask_recover = F.interpolate(mask_small, (h, w), mode='bilinear')
+        mask_small = F.interpolate(mask, (h // sfact, w // sfact), mode="bilinear")
+        mask_recover = F.interpolate(mask_small, (h, w), mode="bilinear")
         mask_residue = (mask - mask_recover).abs()
         mask_residue = (mask_residue >= 0.01).float()
         return mask_residue
@@ -87,9 +86,9 @@ def masks_noise(masks):
 
 
 def mask_iou(pred_label, label):
-    '''
+    """
     calculate mask iou for pred_label and gt_label
-    '''
+    """
 
     pred_label = (pred_label > 0)[0].int()
     label = (label > 128)[0].int()
@@ -100,9 +99,13 @@ def mask_iou(pred_label, label):
 
 
 def compute_iou(preds, target):
-    assert target.shape[1] == 1, 'only support one mask per image now'
-    if (preds.shape[2] != target.shape[2] or preds.shape[3] != target.shape[3]):  # 缩放到合适的比例
-        postprocess_preds = F.interpolate(preds, size=target.size()[2:], mode='bilinear', align_corners=False)
+    assert target.shape[1] == 1, "only support one mask per image now"
+    if (
+        preds.shape[2] != target.shape[2] or preds.shape[3] != target.shape[3]
+    ):  # 缩放到合适的比例
+        postprocess_preds = F.interpolate(
+            preds, size=target.size()[2:], mode="bilinear", align_corners=False
+        )
     else:
         postprocess_preds = preds
     iou = 0
@@ -119,7 +122,7 @@ def mask_to_boundary(mask, dilation_ratio=0.02):
     :return: boundary mask (numpy array)
     """
     h, w = mask.shape
-    img_diag = np.sqrt(h ** 2 + w ** 2)
+    img_diag = np.sqrt(h**2 + w**2)
     dilation = int(round(dilation_ratio * img_diag))
     if dilation < 1:
         dilation = 1
@@ -127,7 +130,7 @@ def mask_to_boundary(mask, dilation_ratio=0.02):
     new_mask = cv2.copyMakeBorder(mask, 1, 1, 1, 1, cv2.BORDER_CONSTANT, value=0)
     kernel = np.ones((3, 3), dtype=np.uint8)
     new_mask_erode = cv2.erode(new_mask, kernel, iterations=dilation)
-    mask_erode = new_mask_erode[1: h + 1, 1: w + 1]
+    mask_erode = new_mask_erode[1 : h + 1, 1 : w + 1]
     # G_d intersects G in the paper.
     return mask - mask_erode
 
@@ -153,13 +156,14 @@ def boundary_iou(gt, dt, dilation_ratio=0.02):
 
 
 def compute_boundary_iou(preds, target):
-    assert target.shape[1] == 1, 'only support one mask per image now'
-    if (preds.shape[2] != target.shape[2] or preds.shape[3] != target.shape[3]):
-        postprocess_preds = F.interpolate(preds, size=target.size()[2:], mode='bilinear', align_corners=False)
+    assert target.shape[1] == 1, "only support one mask per image now"
+    if preds.shape[2] != target.shape[2] or preds.shape[3] != target.shape[3]:
+        postprocess_preds = F.interpolate(
+            preds, size=target.size()[2:], mode="bilinear", align_corners=False
+        )
     else:
         postprocess_preds = preds
     iou = 0
     for i in range(0, len(preds)):
         iou = iou + boundary_iou(target[i], postprocess_preds[i])
     return iou / len(preds)
-

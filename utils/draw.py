@@ -1,7 +1,5 @@
-import numpy as np
-
 import matplotlib.pyplot as plt
-from matplotlib import patches
+import numpy as np
 
 
 def show_anns(masks, input_point, input_box, input_label, filename, image, ious, boundary_ious):
@@ -48,22 +46,18 @@ def show_box(box, ax):
 
 
 def draw_tensor(data, points=None, boxes=None):
-    # test
-    if points is None:
-        points = {}
-    boxes = boxes.cpu().numpy()
+    # 显示图像
 
     mask_numpy = data.squeeze(dim=0).permute(1, 2, 0).cpu().numpy()
-    #
-    # # 显示图像
     plt.imshow(mask_numpy, cmap='gray')
     # Draw points on the image
-    for point_type, point_coords in points.items():
-        plt.scatter(point_coords[:, 0], point_coords[:, 1], label=point_type, marker='x')
+    if points is not None:
+        for point_type, point_coords in points.items():
+            plt.scatter(point_coords[:, 0], point_coords[:, 1], label=point_type, marker='x')
 
-    # Draw boxes on the image
-    for box in boxes:
-        x, y, width, height = box
-        rect = patches.Rectangle((x, y), width, height, linewidth=2, edgecolor='r', facecolor='none')
-        plt.gca().add_patch(rect)
+    if boxes is not None:
+        boxes = boxes.cpu().numpy()
+        for box in boxes:
+            x, y, width, height = box
+            show_box(box, plt.gca())
     plt.show()

@@ -1,12 +1,10 @@
 import os
 
-import torch.cuda
 from torch import optim
 
 from datasets import SegSets
-from experiment.eval import box_val
-from experiment.train import train
-from segment_anything.build_sam_hq import sam_model_registry
+from experiment.eval import *
+from segment_anything import sam_model_registry_baseline as sam_model_registry
 from utils.logger import logger_train
 
 # this method is deprecated.
@@ -14,14 +12,14 @@ visualize = False
 epoch_start = 0
 epoch_num = 200
 save_freq = 5
-checkpoint = "./sam_hq_vit_b.pth"
+checkpoint = "./sam_vit_b_01ec64.pth"
 
 # set KMP_DUPLICATE_LIB_OK=TRUE
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 
 print("--- init model ---")
+# model = sam_model_registry_baseline["vit_b"](checkpoint=checkpoint)
 model = sam_model_registry["vit_b"](checkpoint=checkpoint)
-
 print("--- create dataloader ---")
 train_dataloader = SegSets.seg_train
 val_dataloader = SegSets.seg_val
@@ -45,21 +43,7 @@ optimizer = optim.Adam(model.parameters(), lr=1e-3, betas=(0.9, 0.999), eps=1e-0
 lr_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=100, eta_min=1e-08)
 
 # LOOP
-for epoch in range(epoch_start, epoch_num):
-    # EVALUATE
-    # if epoch % save_freq == 0 and epoch != 0:
-    if epoch % save_freq == 0:
-        model.eval()
-        print(f"Validating...{epoch}")
-        iou, boundary_iou = box_val(model, val_dataloader, False)
-        logger_train.warning(f"{epoch}:{iou}\t{boundary_iou}")
-    # TRAIN
-    model.train()
-    print(f"Training...epoch:{epoch}")
-    print("epoch:   ", epoch, "  learning rate:  ", optimizer.param_groups[0]["lr"])
-    res_loss = train(model, train_dataloader, optimizer, lr_scheduler)
-    logger_train.info(f"{epoch}:{res_loss}")
-    # SAVE
-    if epoch % save_freq == 0:
-        print(f"Saving pth at './weights_b/{epoch}.pth'")
-        torch.save(model.state_dict(), f"./weights_b/{epoch}.pth")
+model.eval()
+print(f"Validating...")
+iou, boundary_iou = box_val(model, val_dataloader)
+logger_train.warning(f"SAM_VIT_B:{iou}\t{boundary_iou}")

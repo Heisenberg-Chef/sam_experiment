@@ -1,7 +1,12 @@
 from typing import List
 
+import cv2 as cv
+import numpy as np
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
+# from scipy.ndimage.morphology import distance_transform_edt as edt
+from scipy.ndimage import convolve
 
 
 def dice_loss(
@@ -18,7 +23,6 @@ def dice_loss(
                  classification label for each element in inputs
                 (0 for the negative class and 1 for the positive class).
     """
-    inputs = inputs.sigmoid()
     inputs = inputs.flatten(1)
     numerator = 2 * (inputs * targets).sum(-1)
     denominator = inputs.sum(-1) + targets.sum(-1)
@@ -41,10 +45,105 @@ def sigmoid_ce_loss(
     Returns:
         Loss tensor
     """
-    loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction="none")
+    loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction="mean")
 
-    return loss.mean(1).sum() / num_masks
+    return loss
 
+
+def torch2D_Hausdorff_distance(x, y):  # Input be like (Batch,width,height)
+    x = x.float()
+    y = y.float()
+    distance_matrix = torch.cdist(x, y, p=2)  # p=2 means Euclidean Distance
+
+    value1 = distance_matrix.min(2)[0].max(1, keepdim=True)[0]
+    value2 = distance_matrix.min(1)[0].max(1, keepdim=True)[0]
+
+    value = torch.cat((value1, value2), dim=1)
+
+    return value.max(1)[0].mean()
+
+class HausdorffERLoss(nn.Module):
+    """Binary Hausdorff loss based on morphological erosion"""
+
+    def __init__(self, alpha=2.0, erosions=10, **kwargs):
+        super(HausdorffERLoss, self).__init__()
+        self.alpha = alpha
+        self.erosions = erosions
+        self.prepare_kernels()
+
+    def prepare_kernels(self):
+        cross = np.array([cv.getStructuringElement(cv.MORPH_CROSS, (3, 3))])
+        bound = np.array([[[0, 0, 0], [0, 1, 0], [0, 0, 0]]])
+
+        self.kernel2D = cross * 0.2
+        self.kernel3D = np.array([bound, cross, bound]) * (1 / 7)
+
+    @torch.no_grad()
+    def perform_erosion(
+            self, pred: np.ndarray, target: np.ndarray, debug
+    ) -> np.ndarray:
+        bound = (pred - target) ** 2
+
+        if bound.ndim == 5:
+            kernel = self.kernel3D
+        elif bound.ndim == 4:
+            kernel = self.kernel2D
+        else:
+            raise ValueError(f"Dimension {bound.ndim} is nor supported.")
+
+        eroted = np.zeros_like(bound)
+        erosions = []
+
+        for batch in range(len(bound)):
+
+            # debug
+            erosions.append(np.copy(bound[batch][0]))
+
+            for k in range(self.erosions):
+
+                # compute convolution with kernel
+                dilation = convolve(bound[batch], kernel, mode="constant", cval=0.0)
+
+                # apply soft thresholding at 0.5 and normalize
+                erosion = dilation - 0.5
+                erosion[erosion < 0] = 0
+
+                if erosion.ptp() != 0:
+                    erosion = (erosion - erosion.min()) / erosion.ptp()
+
+                # save erosion and add to loss
+                bound[batch] = erosion
+                eroted[batch] += erosion * (k + 1) ** self.alpha
+
+                if debug:
+                    erosions.append(np.copy(erosion[0]))
+
+        # image visualization in debug mode
+        if debug:
+            return eroted, erosions
+        else:
+            return eroted
+
+    def forward(
+            self, pred: torch.Tensor, target: torch.Tensor, debug=False
+    ) -> torch.Tensor:
+        """
+        Uses one binary channel: 1 - fg, 0 - bg
+        pred: (b, 1, x, y, z) or (b, 1, x, y)
+        target: (b, 1, x, y, z) or (b, 1, x, y)
+        """
+        assert pred.dim() == 4 or pred.dim() == 5, "Only 2D and 3D supported"
+        assert (
+                pred.dim() == target.dim()
+        ), "Prediction and target need to be of same dimension"
+
+        eroted = self.perform_erosion(pred.detach().cpu().numpy(), target.detach().cpu().numpy(), debug)
+
+        loss = eroted.mean() / eroted.max()
+
+        return loss
+
+hausdorff_loss = HausdorffERLoss()
 
 dice_loss_jit = torch.jit.script(
     dice_loss
@@ -193,5 +292,6 @@ def loss_masks(src_masks, target_masks, num_masks, oversample_ratio=3.0):
 
     loss_mask = sigmoid_ce_loss_jit(point_logits, point_labels, num_masks)
     loss_dice = dice_loss_jit(point_logits, point_labels, num_masks)
+    loss_hausdorff = hausdorff_loss(target_masks,src_masks)
 
-    return loss_mask, loss_dice
+    return loss_mask, loss_dice , loss_hausdorff
