@@ -54,9 +54,16 @@ def train(model, dataloader, optimizer, lr_scheduler, input_keys=['box']):
         batch_len = len(batched_output)
         masks = torch.cat([batched_output[i_l]["masks"] for i_l in range(batch_len)])
         # src
-        loss_mask, loss_dice,loss_hausdorff = loss_masks(masks, labels / 255.0, len(masks))
-        loss = loss_mask + loss_dice + loss_hausdorff
-        loss_dict = {"loss_mask": loss_mask.item(), "loss_dice": loss_dice.item(),"loss_hausdorff":loss_hausdorff.item()}
+        ##################
+        ##################
+        ##################
+        loss_mask, loss_dice = loss_masks(masks, labels / 255.0, len(masks))
+        loss = loss_mask + loss_dice
+        loss_dict = {"loss_mask": loss_mask.item(), "loss_dice": loss_dice.item()}
+
+        # loss_mask, loss_dice,loss_hausdorff = loss_masks(masks, labels / 255.0, len(masks))
+        # loss = loss_mask + loss_dice + loss_hausdorff
+        # loss_dict = {"loss_mask": loss_mask.item(), "loss_dice": loss_dice.item(),"loss_hausdorff":loss_hausdorff.item()}
         losses_reduced_scaled = sum(loss_dict.values())
         loss_value += losses_reduced_scaled
         # 优化器更新

@@ -1,12 +1,11 @@
 from typing import List
 
-import cv2 as cv
+# from scipy.ndimage.morphology import distance_transform_edt as edt
 import numpy as np
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
-# from scipy.ndimage.morphology import distance_transform_edt as edt
-from scipy.ndimage import convolve
+from scipy.ndimage.morphology import distance_transform_edt as edt
+from torch import nn
 
 
 def dice_loss(
@@ -33,7 +32,6 @@ def dice_loss(
 def sigmoid_ce_loss(
         inputs: torch.Tensor,
         targets: torch.Tensor,
-        num_masks: float,
 ):
     """
     Args:
@@ -50,79 +48,29 @@ def sigmoid_ce_loss(
     return loss
 
 
-def torch2D_Hausdorff_distance(x, y):  # Input be like (Batch,width,height)
-    x = x.float()
-    y = y.float()
-    distance_matrix = torch.cdist(x, y, p=2)  # p=2 means Euclidean Distance
+class HausdorffDTLoss(nn.Module):
+    """Binary Hausdorff loss based on distance transform"""
 
-    value1 = distance_matrix.min(2)[0].max(1, keepdim=True)[0]
-    value2 = distance_matrix.min(1)[0].max(1, keepdim=True)[0]
-
-    value = torch.cat((value1, value2), dim=1)
-
-    return value.max(1)[0].mean()
-
-class HausdorffERLoss(nn.Module):
-    """Binary Hausdorff loss based on morphological erosion"""
-
-    def __init__(self, alpha=2.0, erosions=10, **kwargs):
-        super(HausdorffERLoss, self).__init__()
+    def __init__(self, alpha=2.0, **kwargs):
+        super(HausdorffDTLoss, self).__init__()
         self.alpha = alpha
-        self.erosions = erosions
-        self.prepare_kernels()
-
-    def prepare_kernels(self):
-        cross = np.array([cv.getStructuringElement(cv.MORPH_CROSS, (3, 3))])
-        bound = np.array([[[0, 0, 0], [0, 1, 0], [0, 0, 0]]])
-
-        self.kernel2D = cross * 0.2
-        self.kernel3D = np.array([bound, cross, bound]) * (1 / 7)
 
     @torch.no_grad()
-    def perform_erosion(
-            self, pred: np.ndarray, target: np.ndarray, debug
-    ) -> np.ndarray:
-        bound = (pred - target) ** 2
+    def distance_field(self, img: np.ndarray) -> np.ndarray:
+        field = np.zeros_like(img)
 
-        if bound.ndim == 5:
-            kernel = self.kernel3D
-        elif bound.ndim == 4:
-            kernel = self.kernel2D
-        else:
-            raise ValueError(f"Dimension {bound.ndim} is nor supported.")
+        for batch in range(len(img)):
+            fg_mask = img[batch] > 0.8
 
-        eroted = np.zeros_like(bound)
-        erosions = []
+            if fg_mask.any():
+                bg_mask = ~fg_mask
 
-        for batch in range(len(bound)):
+                fg_dist = edt(fg_mask)
+                bg_dist = edt(bg_mask)
 
-            # debug
-            erosions.append(np.copy(bound[batch][0]))
-
-            for k in range(self.erosions):
-
-                # compute convolution with kernel
-                dilation = convolve(bound[batch], kernel, mode="constant", cval=0.0)
-
-                # apply soft thresholding at 0.5 and normalize
-                erosion = dilation - 0.5
-                erosion[erosion < 0] = 0
-
-                if erosion.ptp() != 0:
-                    erosion = (erosion - erosion.min()) / erosion.ptp()
-
-                # save erosion and add to loss
-                bound[batch] = erosion
-                eroted[batch] += erosion * (k + 1) ** self.alpha
-
-                if debug:
-                    erosions.append(np.copy(erosion[0]))
-
-        # image visualization in debug mode
-        if debug:
-            return eroted, erosions
-        else:
-            return eroted
+                # field[batch] = fg_dist + bg_dist
+                field[batch] = fg_dist
+        return field
 
     def forward(
             self, pred: torch.Tensor, target: torch.Tensor, debug=False
@@ -137,13 +85,62 @@ class HausdorffERLoss(nn.Module):
                 pred.dim() == target.dim()
         ), "Prediction and target need to be of same dimension"
 
-        eroted = self.perform_erosion(pred.detach().cpu().numpy(), target.detach().cpu().numpy(), debug)
+        # pred = torch.sigmoid(pred)
+        small = F.interpolate(pred, size=(1020, 1020), mode="bilinear", align_corners=False)
+        re_big = F.pad(small, (2, 2, 2, 2), mode='constant', value=.0)
+        pred = pred - re_big
+        # gt
+        small = F.interpolate(target, size=(1020, 1020), mode="bilinear", align_corners=False)
+        re_big = F.pad(small, (2, 2, 2, 2), mode='constant', value=.0)
+        target = target - re_big
 
-        loss = eroted.mean() / eroted.max()
+        pred_dt = torch.from_numpy(self.distance_field(pred.detach().cpu().numpy())).cuda().float()
+        target_dt = torch.from_numpy(self.distance_field(target.detach().cpu().numpy())).cuda().float()
 
-        return loss
+        pred_error = (pred - target) ** 2
+        distance = pred_dt ** self.alpha + target_dt ** self.alpha
 
-hausdorff_loss = HausdorffERLoss()
+        dt_field = pred_error * distance
+        loss = dt_field.mean()
+
+        if debug:
+            return (
+                loss.cpu().numpy(),
+                (
+                    dt_field.cpu().numpy()[0, 0],
+                    pred_error.cpu().numpy()[0, 0],
+                    distance.cpu().numpy()[0, 0],
+                    pred_dt.cpu().numpy()[0, 0],
+                    target_dt.cpu().numpy()[0, 0],
+                ),
+            )
+
+        else:
+            return loss
+
+
+hausdorff = HausdorffDTLoss()
+
+
+def hausdorff_loss(
+        pred: torch.Tensor, gt: torch.Tensor, num_masks: float
+) -> torch.Tensor:
+    """
+    Uses one binary channel: 1 - fg, 0 - bg
+    pred: (b, 1, x, y, z) or (b, 1, x, y)
+    target: (b, 1, x, y, z) or (b, 1, x, y)
+    """
+    # pred
+    small = F.interpolate(pred, size=(992, 992), mode="bilinear", align_corners=False)
+    re_big = F.pad(small, (16, 16, 16, 16), mode='constant', value=.0)
+    pred = pred - re_big
+    # gt
+    small = F.interpolate(gt, size=(992, 992), mode="bilinear", align_corners=False)
+    re_big = F.pad(small, (16, 16, 16, 16), mode='constant', value=.0)
+    gt = gt - re_big
+    loss = sigmoid_ce_loss(pred, gt)
+    return loss
+
 
 dice_loss_jit = torch.jit.script(
     dice_loss
@@ -152,6 +149,10 @@ dice_loss_jit = torch.jit.script(
 sigmoid_ce_loss_jit = torch.jit.script(
     sigmoid_ce_loss
 )  # type: torch.jit.ScriptModule
+
+hausdorff_loss_jit = torch.jit.script(
+    hausdorff_loss
+)
 
 
 def calculate_uncertainty(logits):
@@ -290,8 +291,43 @@ def loss_masks(src_masks, target_masks, num_masks, oversample_ratio=3.0):
         align_corners=False,
     ).squeeze(1)
 
-    loss_mask = sigmoid_ce_loss_jit(point_logits, point_labels, num_masks)
+    loss_mask = sigmoid_ce_loss_jit(point_logits, point_labels)
     loss_dice = dice_loss_jit(point_logits, point_labels, num_masks)
-    loss_hausdorff = hausdorff_loss(target_masks,src_masks)
 
-    return loss_mask, loss_dice , loss_hausdorff
+    return loss_mask, loss_dice
+
+
+def loss_masks_3(src_masks, target_masks, num_masks, oversample_ratio=3.0):
+    """Compute the losses related to the masks: the focal loss and the dice loss.
+    targets dicts must contain the key "masks" containing a tensor of dim [nb_target_boxes, h, w]
+    """
+
+    # No need to upsample predictions as we are using normalized coordinates :)
+
+    with torch.no_grad():
+        # sample point_coords
+        point_coords = get_uncertain_point_coords_with_randomness(
+            src_masks,
+            lambda logits: calculate_uncertainty(logits),
+            112 * 112,
+            oversample_ratio,
+            0.75,
+        )
+        # get gt labels
+        point_labels = point_sample(
+            target_masks,
+            point_coords,
+            align_corners=False,
+        ).squeeze(1)
+
+    point_logits = point_sample(
+        src_masks,
+        point_coords,
+        align_corners=False,
+    ).squeeze(1)
+
+    loss_mask = sigmoid_ce_loss_jit(point_logits, point_labels)
+    loss_dice = dice_loss_jit(point_logits, point_labels, num_masks)
+    loss_hausdorff = hausdorff(src_masks, target_masks)
+
+    return loss_mask, loss_dice, loss_hausdorff
