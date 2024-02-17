@@ -12,9 +12,10 @@ from torch import nn
 from torch.nn import functional as F
 
 from .common import LayerNorm2d
+from .transformer import TransformerMine
 
 
-class MaskDecoderHQ(nn.Module):
+class MaskDecoderMine(nn.Module):
     def __init__(
             self,
             *,
@@ -26,29 +27,12 @@ class MaskDecoderHQ(nn.Module):
             iou_head_hidden_dim: int = 256,
             vit_dim: int = 1024,
     ) -> None:
-        """
-        Predicts masks given an image and prompt embeddings, using a
-        transformer architecture.
-
-        Arguments:
-          transformer_dim (int): the channel dimension of the transformer
-          transformer (nn.Module): the transformer used to predict masks
-          num_multimask_outputs (int): the number of masks to predict
-            when disambiguating masks
-          activation (nn.Module): the type of activation to use when
-            upscaling masks
-          iou_head_depth (int): the depth of the MLP used to predict
-            mask quality
-          iou_head_hidden_dim (int): the hidden dimension of the MLP
-            used to predict mask quality
-        """
         super().__init__()
         self.transformer_dim = transformer_dim
         self.transformer = transformer
 
         self.num_multimask_outputs = num_multimask_outputs
 
-        # self.iou_token = nn.Embedding(1, transformer_dim)
         self.iou_token = nn.Parameter(torch.randn([1, transformer_dim]))
         self.num_mask_tokens = num_multimask_outputs + 1
         self.mask_tokens = nn.Embedding(self.num_mask_tokens, transformer_dim)
@@ -71,30 +55,28 @@ class MaskDecoderHQ(nn.Module):
             transformer_dim, iou_head_hidden_dim, self.num_mask_tokens, iou_head_depth
         )
 
-        # HQ-SAM parameters
-        self.hf_token = nn.Embedding(1, transformer_dim)  # HQ-Ouptput-Token
-        self.hf_mlp = MLP(transformer_dim, transformer_dim, transformer_dim // 8,
-                          3)  # corresponding new MLP layer for HQ-Ouptput-Token
         self.num_mask_tokens = self.num_mask_tokens + 1
 
-        # three conv fusion layers for obtaining HQ-Feature
-        self.compress_vit_feat = nn.Sequential(
-            nn.ConvTranspose2d(vit_dim, transformer_dim, kernel_size=2, stride=2),
-            LayerNorm2d(transformer_dim),
-            nn.GELU(),
-            nn.ConvTranspose2d(transformer_dim, transformer_dim // 8, kernel_size=2, stride=2))
-
-        self.embedding_encoder = nn.Sequential(
+        #########
+        # MINE
+        #########
+        self.mine_upscaling = nn.Sequential(
             nn.ConvTranspose2d(transformer_dim, transformer_dim // 4, kernel_size=2, stride=2),
             LayerNorm2d(transformer_dim // 4),
-            nn.GELU(),
+            activation(),
             nn.ConvTranspose2d(transformer_dim // 4, transformer_dim // 8, kernel_size=2, stride=2),
+            activation(),
         )
-        self.embedding_maskfeature = nn.Sequential(
-            nn.Conv2d(transformer_dim // 8, transformer_dim // 4, 3, 1, 1),
-            LayerNorm2d(transformer_dim // 4),
-            nn.GELU(),
-            nn.Conv2d(transformer_dim // 4, transformer_dim // 8, 3, 1, 1))
+
+        self.hf_token = nn.Embedding(1, transformer_dim)
+        self.hf_mlp = MLP(transformer_dim, transformer_dim, transformer_dim // 8,
+                          3)
+        self.cascade_transformer = TransformerMine(
+            depth=2,
+            embedding_dim=transformer_dim,
+            mlp_dim=2048,
+            num_heads=8,
+        )
 
     def forward(
             self,
@@ -106,31 +88,13 @@ class MaskDecoderHQ(nn.Module):
             hq_token_only: bool,
             interm_embeddings: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Predict masks given image and prompt embeddings.
-
-        Arguments:
-          image_embeddings (torch.Tensor): the embeddings from the ViT image encoder
-          image_pe (torch.Tensor): positional encoding with the shape of image_embeddings
-          sparse_prompt_embeddings (torch.Tensor): the embeddings of the points and boxes
-          dense_prompt_embeddings (torch.Tensor): the embeddings of the mask inputs
-          multimask_output (bool): Whether to return multiple masks or a single
-            mask.
-
-        Returns:
-          torch.Tensor: batched predicted masks
-          torch.Tensor: batched predictions of mask quality
-        """
-        vit_features = interm_embeddings[0].permute(0, 3, 1,
-                                                    2)  # early-layer ViT feature, after 1st global attention block in ViT
-        hq_features = self.embedding_encoder(image_embeddings) + self.compress_vit_feat(vit_features)
 
         masks, iou_pred = self.predict_masks(
             image_embeddings=image_embeddings,
             image_pe=image_pe,
             sparse_prompt_embeddings=sparse_prompt_embeddings,
             dense_prompt_embeddings=dense_prompt_embeddings,
-            hq_features=hq_features,
+            mine_feature=interm_embeddings
         )
 
         # Select the correct mask or masks for output
@@ -162,7 +126,7 @@ class MaskDecoderHQ(nn.Module):
             image_pe: torch.Tensor,
             sparse_prompt_embeddings: torch.Tensor,
             dense_prompt_embeddings: torch.Tensor,
-            hq_features: torch.Tensor,
+            mine_feature: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Predicts masks. See 'forward' for more details."""
         # Concatenate output tokens
@@ -181,11 +145,17 @@ class MaskDecoderHQ(nn.Module):
         iou_token_out = hs[:, 0, :]
         mask_tokens_out = hs[:, 1: (1 + self.num_mask_tokens), :]
 
+        # MINE
+        cascade_vit = dense_prompt_embeddings + mine_feature
+        pos_cascade_vit = image_pe
+        mine_cascade_src = self.cascade_transformer(cascade_vit, pos_cascade_vit, tokens)
+
         # Upscale mask embeddings and predict masks using the mask tokens
         src = src.transpose(1, 2).view(b, c, h, w)
-
+        mine_cascade_src = mine_cascade_src.transpose(1, 2).view(b, c, h, w)
         upscaled_embedding_sam = self.output_upscaling(src)
-        upscaled_embedding_hq = self.embedding_maskfeature(upscaled_embedding_sam) + hq_features.repeat(b, 1, 1, 1)
+
+        upscaled_embedding_mine = self.mine_upscaling(mine_cascade_src)
 
         hyper_in_list: List[torch.Tensor] = []
         for i in range(self.num_mask_tokens):
@@ -199,9 +169,11 @@ class MaskDecoderHQ(nn.Module):
 
         masks_sam = (hyper_in[:, :self.num_mask_tokens - 1] @ upscaled_embedding_sam.view(b, c, h * w)).view(b, -1, h,
                                                                                                              w)
-        masks_sam_hq = (hyper_in[:, self.num_mask_tokens - 1:] @ upscaled_embedding_hq.view(b, c, h * w)).view(b, -1, h,
-                                                                                                               w)
-        masks = torch.cat([masks_sam, masks_sam_hq], dim=1)
+        masks_sam_mine = (hyper_in[:, self.num_mask_tokens - 1:] @ upscaled_embedding_mine.view(b, c, h * w)).view(b,
+                                                                                                                   -1,
+                                                                                                                   h,
+                                                                                                                   w)
+        masks = torch.cat([masks_sam, masks_sam_mine], dim=1)
         # Generate mask quality predictions
         iou_pred = self.iou_prediction_head(iou_token_out)
 

@@ -4,24 +4,24 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-import torch
-from torch import Tensor, nn
-
 import math
 from typing import Tuple, Type
+
+import torch
+from torch import Tensor, nn
 
 from .common import MLPBlock
 
 
 class TwoWayTransformer(nn.Module):
     def __init__(
-        self,
-        depth: int,
-        embedding_dim: int,
-        num_heads: int,
-        mlp_dim: int,
-        activation: Type[nn.Module] = nn.ReLU,
-        attention_downsample_rate: int = 2,
+            self,
+            depth: int,
+            embedding_dim: int,
+            num_heads: int,
+            mlp_dim: int,
+            activation: Type[nn.Module] = nn.ReLU,
+            attention_downsample_rate: int = 2,
     ) -> None:
         """
         A transformer decoder that attends to an input image using
@@ -60,10 +60,10 @@ class TwoWayTransformer(nn.Module):
         self.norm_final_attn = nn.LayerNorm(embedding_dim)
 
     def forward(
-        self,
-        image_embedding: Tensor,
-        image_pe: Tensor,
-        point_embedding: Tensor,
+            self,
+            image_embedding: Tensor,
+            image_pe: Tensor,
+            point_embedding: Tensor,
     ) -> Tuple[Tensor, Tensor]:
         """
         Args:
@@ -106,15 +106,70 @@ class TwoWayTransformer(nn.Module):
         return queries, keys
 
 
+class TransformerMine(nn.Module):
+    def __init__(
+            self,
+            depth: int,
+            embedding_dim: int,
+            num_heads: int,
+            mlp_dim: int,
+            activation: Type[nn.Module] = nn.GELU,
+            attention_downsample_rate: int = 2,
+    ) -> None:
+        super().__init__()
+        self.depth = depth
+        self.embedding_dim = embedding_dim
+        self.num_heads = num_heads
+        self.mlp_dim = mlp_dim
+        self.layers = nn.ModuleList()
+
+        for i in range(depth):
+            self.layers.append(
+                TwoWayAttentionBlock(
+                    embedding_dim=embedding_dim,
+                    num_heads=num_heads,
+                    mlp_dim=mlp_dim,
+                    activation=activation,
+                    attention_downsample_rate=attention_downsample_rate,
+                    skip_first_layer_pe=(i == 0),
+                )
+            )
+
+    def forward(
+            self,
+            image_embedding: Tensor,
+            image_pe: Tensor,
+            point_embedding: Tensor,
+    ) -> Tuple[Tensor, Tensor]:
+        # BxCxHxW -> BxHWxC == B x N_image_tokens x C
+        bs, c, h, w = image_embedding.shape
+        image_embedding = image_embedding.flatten(2).permute(0, 2, 1)
+        image_pe = image_pe.flatten(2).permute(0, 2, 1)
+
+        # Prepare queries
+        queries = point_embedding
+        keys = image_embedding
+
+        # Apply transformer blocks and final layernorm
+        for layer in self.layers:
+            queries, keys = layer(
+                queries=queries,
+                keys=keys,
+                query_pe=point_embedding,
+                key_pe=image_pe,
+            )
+        return keys
+
+
 class TwoWayAttentionBlock(nn.Module):
     def __init__(
-        self,
-        embedding_dim: int,
-        num_heads: int,
-        mlp_dim: int = 2048,
-        activation: Type[nn.Module] = nn.ReLU,
-        attention_downsample_rate: int = 2,
-        skip_first_layer_pe: bool = False,
+            self,
+            embedding_dim: int,
+            num_heads: int,
+            mlp_dim: int = 2048,
+            activation: Type[nn.Module] = nn.ReLU,
+            attention_downsample_rate: int = 2,
+            skip_first_layer_pe: bool = False,
     ) -> None:
         """
         A transformer block with four layers: (1) self-attention of sparse
@@ -149,7 +204,7 @@ class TwoWayAttentionBlock(nn.Module):
         self.skip_first_layer_pe = skip_first_layer_pe
 
     def forward(
-        self, queries: Tensor, keys: Tensor, query_pe: Tensor, key_pe: Tensor
+            self, queries: Tensor, keys: Tensor, query_pe: Tensor, key_pe: Tensor
     ) -> Tuple[Tensor, Tensor]:
         # Self attention block
         if self.skip_first_layer_pe:
@@ -189,10 +244,10 @@ class Attention(nn.Module):
     """
 
     def __init__(
-        self,
-        embedding_dim: int,
-        num_heads: int,
-        downsample_rate: int = 1,
+            self,
+            embedding_dim: int,
+            num_heads: int,
+            downsample_rate: int = 1,
     ) -> None:
         super().__init__()
         self.embedding_dim = embedding_dim
