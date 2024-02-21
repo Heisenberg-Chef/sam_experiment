@@ -68,34 +68,6 @@ def point_val(model, dataloader, k=10, debug=False):
     return gather_iou, gather_boundary_iou
 
 
-def text_val(model, dataloader, clip, text=""):
-    iou_res = []
-    boundary_iou_res = []
-    for data in tqdm(dataloader):
-        input_, label, label_val, img_val = data['image'], data['label'], data['ori_label'], data['ori_img']
-        input_ = input_.squeeze(dim=0).cuda()
-        label = label.squeeze(dim=0).cuda()
-        label_val = label_val.cuda()
-        img_val = img_val.squeeze(dim=0).cuda()
-        # BATCH SIZE MUST EQUAL ONE.
-        dict_input: dict[str, Any] = {}
-        point_coords = misc.masks_sample_points(label, k=k)
-        dict_input['image'] = torch.as_tensor(input_, device=model.device).contiguous()
-        dict_input['original_size'] = label.shape[-2:]
-        text_encode = clip(text)
-        dict_input['text_encode'] = text_encode
-        with torch.no_grad():
-            # must be batch.
-            output = model([dict_input], multimask_output=False)
-        iou = compute_iou(output[0]["masks"], label.unsqueeze(dim=0))
-        boundary_iou = compute_boundary_iou(output[0]["masks"], label.unsqueeze(dim=0))
-        iou_res.append(iou)
-        boundary_iou_res.append(boundary_iou)
-    gather_iou = sum(iou_res) / len(dataloader)
-    gather_boundary_iou = sum(boundary_iou_res) / len(dataloader)
-    return gather_iou, gather_boundary_iou
-
-
 def point_box_val(model, dataloader, k=1, debug=False):
     iou_res = []
     boundary_iou_res = []
